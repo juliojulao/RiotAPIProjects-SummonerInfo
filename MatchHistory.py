@@ -3,6 +3,10 @@ import pandas as pd
 import json
 import sys
 
+
+API_KEY = 'RGAPI-8e40f273-b4ec-47e1-91c9-a5a2c923b40e'
+watcher = LolWatcher(API_KEY)
+
 regions = {
     "na1" :  {"north america", "na", "na1"},
     "euw1" : {"europe west", "eu", "euw1"},
@@ -21,15 +25,28 @@ def getRegion():
             continue
 
 def getSummoner(watcher, region):
+    # Get summoner name
     while True:
         try:
             summoner = input("Enter summoner name (leave blank to exit): ")
             if summoner == '':
                 break
             return watcher.summoner.by_name(region,summoner)
-        except ApiError:
-            print("Summoner does not exist in this region")
+        except ApiError as err:
+            if err.response.status_code == 403:
+                print("Invalid API key")
+                break
+            elif err.response.status_code == 404:
+                print("Summoner does not exist in this region")
             continue
+
+def getSummonerRank(watcher, region, me):
+    ranks = watcher.league.by_summoner(region, me['id'])
+    for rank in ranks:
+        if rank['queueType'] == 'RANKED_SOLO_5x5':
+            return rank
+    return None
+
 
 def itemName(watcher, item_id):
     if item_id == 0:
@@ -47,16 +64,12 @@ def championName(watcher, champ_dict, champ_id):
             return v["name"]
 
 if __name__ == "__main__":
-    # global variables
-    API_KEY = 'RGAPI-135617b9-af84-4a3c-9dfa-779cce9d25a2'
-    watcher = LolWatcher(API_KEY)
     region = getRegion()
     me = getSummoner(watcher, region)
-    champ_dict = watcher.data_dragon.champions('10.16.1')["data"]
-    summs_dict = watcher.data_dragon.summoner_spells('10.16.1')["data"]
-
     if me == None:
         sys.exit()
+    champ_dict = watcher.data_dragon.champions('10.16.1')["data"]
+    summs_dict = watcher.data_dragon.summoner_spells('10.16.1')["data"]
 
     while True:
         try:
@@ -70,19 +83,36 @@ if __name__ == "__main__":
             if task == 1:
                 # Return ranked stats
                 try:
-                    ranked_stats = watcher.league.by_summoner(region, me['id'])[0]
+                    ranked_stats = getSummonerRank(watcher, region, me)
                     print("   Rank: {} {} at {} LP\n".format(ranked_stats["tier"], ranked_stats["rank"], ranked_stats["leaguePoints"]) +
-                        "   Wins: {}\n".format(ranked_stats["wins"]) +
-                        " Losses: {}".format(ranked_stats["losses"]))
-                except IndexError:
+                          "   Wins: {}\n".format(ranked_stats["wins"]) +
+                          " Losses: {}\n".format(ranked_stats["losses"]) +
+                          "Winrate: {:.0%}".format(ranked_stats["wins"] / (ranked_stats["wins"] + ranked_stats["losses"])))
+                except TypeError:
                     print("No ranked stats available for this summoner.")
             
             elif task == 2:
                 # Return current match details
                 try:
                     current_match = watcher.spectator.by_summoner(region,me['id'])
-                    json_obj = json.dumps(current_match, indent=4)
-                    print(json_obj)
+                    participants = []
+                    for row in current_match['participants']:
+                        parts_row = {}
+                        try:
+                            rank = getSummonerRank(watcher, region, watcher.summoner.by_name(region,row['summonerName']))
+                            parts_row['Rank'] = rank['tier'] + ' ' + rank['rank']
+                        except TypeError:
+                            parts_row['Rank'] = 'Unkranked'
+                        parts_row['Champion'] = championName(watcher, champ_dict, row['championId'])
+                        parts_row['SS1'] = ssName(watcher, summs_dict, row['spell1Id'])
+                        parts_row['SS2'] = ssName(watcher, summs_dict, row['spell2Id'])
+                        participants.append(parts_row)
+                    df = pd.DataFrame(participants)
+                    print('\n')
+                    print(df)
+                    print('\n')
+                    # json_obj = json.dumps(current_match, indent=4)
+                    # print(json_obj)
                 except ApiError:
                     print("Summoner currently not in a match.")
 
@@ -91,12 +121,14 @@ if __name__ == "__main__":
                 my_matches = watcher.match.matchlist_by_account(region, me['accountId'])
                 last_match = my_matches['matches'][0]
                 match_detail = watcher.match.by_id(region, last_match['gameId'])
-                # print(match_detail['participants'])
+                print(match_detail["participantIdentities"][1])
+                # print(match_detail)
 
                 participants = []
                 for row in match_detail['participants']:
                     participants_row = {}
-                    participants_row['SummonerName'] = match_detail[row['participantId']]
+                    if int(row['participantId']) ==  match_detail["participantIdentities"][int(row['participantId']-1)]:
+                        participants_row['SummonerName'] = match_detail["participantIdentities"]['player']['summonerName']
                     participants_row['Champion'] = championName(watcher, champ_dict, row['championId'])
                     participants_row['SS1'] = ssName(watcher, summs_dict, row['spell1Id'])
                     participants_row['SS2'] = ssName(watcher, summs_dict, row['spell2Id'])
