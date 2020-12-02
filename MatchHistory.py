@@ -1,11 +1,13 @@
 from riotwatcher import LolWatcher, ApiError
+from tabulate import tabulate
 import pandas as pd
 import json
 import sys
 
 
-API_KEY = 'RGAPI-8e40f273-b4ec-47e1-91c9-a5a2c923b40e'
+API_KEY = 'RGAPI-752b11b9-57f3-431d-92cd-c7f87ffbef1b'
 watcher = LolWatcher(API_KEY)
+patch_version = '10.24.1'
 
 regions = {
     "na1" :  {"north america", "na", "na1"},
@@ -48,10 +50,13 @@ def getSummonerRank(watcher, region, me):
     return None
 
 
-def itemName(watcher, item_id):
-    if item_id == 0:
+def itemName(watcher, items_dict, item_id):
+    try:
+        if item_id == 0:
+            return ""
+        return items_dict[str(item_id)]['name']
+    except KeyError:
         return ""
-    return watcher.data_dragon.items('10.16.1')["data"][str(item_id)]["name"]
 
 def ssName(watcher, summs_dict, ss_id):
     for k,v in summs_dict.items():
@@ -64,12 +69,15 @@ def championName(watcher, champ_dict, champ_id):
             return v["name"]
 
 if __name__ == "__main__":
+    champ_dict = watcher.data_dragon.champions(patch_version)["data"]
+    summs_dict = watcher.data_dragon.summoner_spells(patch_version)["data"]
+    items_dict = watcher.data_dragon.items(patch_version)["data"]
+
     region = getRegion()
     me = getSummoner(watcher, region)
     if me == None:
         sys.exit()
-    champ_dict = watcher.data_dragon.champions('10.16.1')["data"]
-    summs_dict = watcher.data_dragon.summoner_spells('10.16.1')["data"]
+
 
     while True:
         try:
@@ -79,6 +87,7 @@ if __name__ == "__main__":
             "   1. Get summoner's ranked stats\n" +
             "   2. Get summoner's current match details\n" +
             "   3. Get summoner's last match details\n" +
+            "   4. Get summoner's last 3 match details\n" +
             "Enter number to perform task (Input 0 to exit): "))
             if task == 1:
                 # Return ranked stats
@@ -87,7 +96,7 @@ if __name__ == "__main__":
                     print("   Rank: {} {} at {} LP\n".format(ranked_stats["tier"], ranked_stats["rank"], ranked_stats["leaguePoints"]) +
                           "   Wins: {}\n".format(ranked_stats["wins"]) +
                           " Losses: {}\n".format(ranked_stats["losses"]) +
-                          "Winrate: {:.0%}".format(ranked_stats["wins"] / (ranked_stats["wins"] + ranked_stats["losses"])))
+                          "Winrate: {:.0%}\n".format(ranked_stats["wins"] / (ranked_stats["wins"] + ranked_stats["losses"])))
                 except TypeError:
                     print("No ranked stats available for this summoner.")
             
@@ -98,59 +107,105 @@ if __name__ == "__main__":
                     participants = []
                     for row in current_match['participants']:
                         parts_row = {}
+                        parts_row['Summoner Name'] = row['summonerName']
                         try:
                             rank = getSummonerRank(watcher, region, watcher.summoner.by_name(region,row['summonerName']))
                             parts_row['Rank'] = rank['tier'] + ' ' + rank['rank']
                         except TypeError:
                             parts_row['Rank'] = 'Unkranked'
                         parts_row['Champion'] = championName(watcher, champ_dict, row['championId'])
-                        parts_row['SS1'] = ssName(watcher, summs_dict, row['spell1Id'])
-                        parts_row['SS2'] = ssName(watcher, summs_dict, row['spell2Id'])
+                        parts_row['Summs 1'] = ssName(watcher, summs_dict, row['spell1Id'])
+                        parts_row['Summs 2'] = ssName(watcher, summs_dict, row['spell2Id'])
+                        if row['teamId'] == 100:
+                            parts_row['Team'] = 'Blue'
+                        else:
+                            parts_row['Team'] = 'Red'
                         participants.append(parts_row)
                     df = pd.DataFrame(participants)
-                    print('\n')
-                    print(df)
+                    print()
+                    print(tabulate(df, showindex=False, headers=df.columns))
                     print('\n')
                     # json_obj = json.dumps(current_match, indent=4)
                     # print(json_obj)
                 except ApiError:
-                    print("Summoner currently not in a match.")
+                    print("Summoner currently not in a match.\n")
 
             elif task == 3:
                 # Return last match detail
                 my_matches = watcher.match.matchlist_by_account(region, me['accountId'])
                 last_match = my_matches['matches'][0]
                 match_detail = watcher.match.by_id(region, last_match['gameId'])
-                print(match_detail["participantIdentities"][1])
-                # print(match_detail)
 
                 participants = []
-                for row in match_detail['participants']:
+                for i,row in enumerate(match_detail['participants']):
                     participants_row = {}
-                    if int(row['participantId']) ==  match_detail["participantIdentities"][int(row['participantId']-1)]:
-                        participants_row['SummonerName'] = match_detail["participantIdentities"]['player']['summonerName']
+                    participants_row['Summoner Name'] = match_detail["participantIdentities"][int(row['participantId']-1)]['player']['summonerName']
                     participants_row['Champion'] = championName(watcher, champ_dict, row['championId'])
-                    participants_row['SS1'] = ssName(watcher, summs_dict, row['spell1Id'])
-                    participants_row['SS2'] = ssName(watcher, summs_dict, row['spell2Id'])
-                    participants_row['Win'] = row['stats']['win']
+                    participants_row['Summ 1'] = ssName(watcher, summs_dict, row['spell1Id'])
+                    participants_row['Summ 2'] = ssName(watcher, summs_dict, row['spell2Id'])
+                    if row['stats']['win'] == True:
+                        participants_row['Win'] = 'Win'
+                    else:
+                        participants_row['Win'] = 'Loss'
                     participants_row['K'] = row['stats']['kills']
                     participants_row['D'] = row['stats']['deaths']
                     participants_row['A'] = row['stats']['assists']
-                    participants_row['DamageDealt'] = row['stats']['totalDamageDealt']
+                    participants_row['Damage Dealt'] = row['stats']['totalDamageDealt']
                     participants_row['Gold'] = row['stats']['goldEarned']
-                    participants_row['ChampLvl'] = row['stats']['champLevel']
+                    participants_row['Champ Lvl'] = row['stats']['champLevel']
                     participants_row['CS'] = row['stats']['totalMinionsKilled']
-                    participants_row['item0'] = itemName(watcher, row['stats']['item0'])
-                    participants_row['item1'] = itemName(watcher, row['stats']['item1'])
-                    participants_row['item2'] = itemName(watcher, row['stats']['item2'])
-                    participants_row['item3'] = itemName(watcher, row['stats']['item3'])
-                    participants_row['item4'] = itemName(watcher, row['stats']['item4'])
-                    participants_row['item5'] = itemName(watcher, row['stats']['item5'])
+                    participants_row['Item 1'] = itemName(watcher, items_dict, row['stats']['item0'])
+                    participants_row['Item 2'] = itemName(watcher, items_dict, row['stats']['item1'])
+                    participants_row['Item 3'] = itemName(watcher, items_dict, row['stats']['item2'])
+                    participants_row['Item 4'] = itemName(watcher, items_dict, row['stats']['item3'])
+                    participants_row['Item 5'] = itemName(watcher, items_dict, row['stats']['item4'])
+                    participants_row['Item 6'] = itemName(watcher, items_dict, row['stats']['item5'])
+                    participants_row['Trinket'] = itemName(watcher, items_dict, row['stats']['item6'])
                     participants.append(participants_row)
                 df = pd.DataFrame(participants)
+                print()
+                print(tabulate(df, showindex=False, headers=df.columns))
                 print('\n')
-                print(df)
-                print('\n')
+
+            elif task == 4:
+                # Return last 3 match detail
+                my_matches = watcher.match.matchlist_by_account(region, me['accountId'])
+                last_match = my_matches['matches'][:3]
+                for i in last_match:
+                    match_detail = watcher.match.by_id(region, i['gameId'])
+
+                    participants = []
+                    for i,row in enumerate(match_detail['participants']):
+                        participants_row = {}
+                        # print(row['participantId'], match_detail["participantIdentities"][int(row['participantId']-1)]['participantId'])
+                        # if int(row['participantId']) ==  match_detail["participantIdentities"][int(row['participantId']-1)]['participantId']:
+                        participants_row['Summoner Name'] = match_detail["participantIdentities"][int(row['participantId']-1)]['player']['summonerName']
+                        participants_row['Champion'] = championName(watcher, champ_dict, row['championId'])
+                        participants_row['Summ 1'] = ssName(watcher, summs_dict, row['spell1Id'])
+                        participants_row['Summ 2'] = ssName(watcher, summs_dict, row['spell2Id'])
+                        if row['stats']['win'] == True:
+                            participants_row['Win'] = 'Win'
+                        else:
+                            participants_row['Win'] = 'Loss'
+                        participants_row['K'] = row['stats']['kills']
+                        participants_row['D'] = row['stats']['deaths']
+                        participants_row['A'] = row['stats']['assists']
+                        participants_row['Damage Dealt'] = row['stats']['totalDamageDealt']
+                        participants_row['Gold'] = row['stats']['goldEarned']
+                        participants_row['Champ Lvl'] = row['stats']['champLevel']
+                        participants_row['CS'] = row['stats']['totalMinionsKilled']
+                        participants_row['Item 1'] = itemName(watcher, items_dict, row['stats']['item0'])
+                        participants_row['Item 2'] = itemName(watcher, items_dict, row['stats']['item1'])
+                        participants_row['Item 3'] = itemName(watcher, items_dict, row['stats']['item2'])
+                        participants_row['Item 4'] = itemName(watcher, items_dict, row['stats']['item3'])
+                        participants_row['Item 5'] = itemName(watcher, items_dict, row['stats']['item4'])
+                        participants_row['Item 6'] = itemName(watcher, items_dict, row['stats']['item5'])
+                        participants_row['Trinket'] = itemName(watcher, items_dict, row['stats']['item6'])
+                        participants.append(participants_row)
+                    df = pd.DataFrame(participants)
+                    print()
+                    print(tabulate(df, showindex=False, headers=df.columns))
+                    print('\n')
             
             elif task == 0:
                 break
