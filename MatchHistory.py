@@ -186,7 +186,7 @@ def championName(watcher, champ_dict, champ_id):
             return v["name"]
 
 if __name__ == "__main__":
-    API_KEY = '' #API key  goes here
+    API_KEY = input('Enter API key: ')
     watcher = LolWatcher(API_KEY)
     patch_version = json.loads(requests.get("https://ddragon.leagueoflegends.com/api/versions.json").content)[0]
     champ_dict = watcher.data_dragon.champions(patch_version)["data"]
